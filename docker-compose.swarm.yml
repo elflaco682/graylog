@@ -1,0 +1,73 @@
+version: '3'
+services:
+    # MongoDB: https://hub.docker.com/_/mongo/
+    mongo:
+      image: mongo:4.2
+      networks:
+        - database
+      volumes:
+      - mongo:/data/db
+    elasticsearch:
+      image: docker.elastic.co/elasticsearch/elasticsearch-oss:7.10.2
+      environment:
+        - http.host=0.0.0.0
+        - transport.host=localhost
+        - network.host=0.0.0.0
+        - "ES_JAVA_OPTS=-Dlog4j2.formatMsgNoLookups=true -Xms512m -Xmx512m"
+      ulimits:
+        memlock:
+          soft: -1
+          hard: -1
+      deploy:
+        resources:
+          limits:
+            memory: 1g
+      networks:
+        - graylog
+    # Graylog: https://hub.docker.com/r/graylog/graylog/
+    graylog:
+      image: graylog/graylog:4.2
+      logging:
+      driver: gelf
+      options:
+        gelf-address: "udp://graylog.localhost:12201"
+      environment:
+        - GRAYLOG_PASSWORD_SECRET=somepasswordpepper
+        - GRAYLOG_ROOT_PASSWORD_SHA2=8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918
+        - "GRAYLOG_HTTP_BIND_ADDRESS=0.0.0.0:9001"
+        - GRAYLOG_HTTP_EXTERNAL_URI=http://graylog.localhost/
+      entrypoint: /usr/bin/tini -- wait-for-it elasticsearch:9200 --  /docker-entrypoint.sh
+      volumes:
+       - graylog-journal:/usr/share/graylog/data/journal
+       - graylog-config:/usr/share/graylog/data/config
+      networks:
+        - graylog
+        - database
+        - traefik_default
+      deploy:
+      replicas: 1
+      update_config:
+        parallelism: 1
+        delay: 2s
+      restart_policy:
+        condition: on-failure
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.graylog.rule=Host(`graylog.localhost`)"
+        - "traefik.http.routers.graylog.entrypoints=websecure"
+        - "traefik.http.services.graylog.loadbalancer.server.port=9001"
+        - "traefik.http.services.graylog.loadbalancer.passhostheader=true"
+      ports:
+        # Graylog web interface and REST API
+        - 9001:9001
+        # Syslog TCP
+        - 1514:1514
+        # Syslog UDP
+        - 1514:1514/udp
+        # GELF TCP
+        - 12201:12201
+        # GELF UDP
+        - 12201:12201/udp
+networks:
+    graylog:
+      driver: bridge
